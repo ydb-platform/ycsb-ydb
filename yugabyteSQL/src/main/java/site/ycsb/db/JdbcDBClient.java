@@ -82,6 +82,8 @@ public class JdbcDBClient extends DB {
   /** The field name prefix in the table. */
   public static final String COLUMN_PREFIX = "FIELD";
 
+  public static final String SERIALIZABLE = "serializable";
+
   /** SQL:2008 standard: FETCH FIRST n ROWS after the ORDER BY. */
   private boolean sqlansiScans = false;
   /** SQL Server before 2012: TOP n after the SELECT. */
@@ -239,7 +241,8 @@ public class JdbcDBClient extends DB {
 
       cachedStatements = new ConcurrentHashMap<StatementType, PreparedStatement>();
 
-      this.dbFlavor = DBFlavor.fromJdbcUrl(urlArr[0]);
+      Boolean isSerializable = Boolean.parseBoolean(props.getProperty(SERIALIZABLE, "false"));
+      this.dbFlavor = DBFlavor.fromJdbcUrl(urlArr[0], isSerializable);
     } catch (ClassNotFoundException e) {
       System.err.println("Error in initializing the JDBS driver: " + e);
       throw new DBException(e);

@@ -23,9 +23,14 @@ import site.ycsb.db.StatementType;
  * A default flavor for relational databases.
  */
 public class DefaultDBFlavor extends DBFlavor {
-  public DefaultDBFlavor() {
+
+  private Boolean useSerialization = false;
+
+  public DefaultDBFlavor(Boolean isSerializable) {
     super(DBName.DEFAULT);
+    useSerialization = isSerializable;
   }
+
   public DefaultDBFlavor(DBName dbName) {
     super(dbName);
   }
@@ -67,7 +72,14 @@ public class DefaultDBFlavor extends DBFlavor {
   @Override
   public String createUpdateStatement(StatementType updateType, String key) {
     String[] fieldKeys = updateType.getFieldString().split(",");
-    StringBuilder update = new StringBuilder("UPDATE ");
+
+    StringBuilder update = new StringBuilder();
+
+    if (useSerialization) {
+      update.append("begin isolation level serializable;");
+    }
+
+    update.append("UPDATE ");
     update.append(updateType.getTableName());
     update.append(" SET ");
     for (int i = 0; i < fieldKeys.length; i++) {
@@ -80,6 +92,11 @@ public class DefaultDBFlavor extends DBFlavor {
     update.append(" WHERE ");
     update.append(JdbcDBClient.PRIMARY_KEY);
     update.append(" = ?");
+
+    if (useSerialization) {
+      update.append(";commit;");
+    }
+
     return update.toString();
   }
 

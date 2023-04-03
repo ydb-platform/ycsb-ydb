@@ -35,11 +35,11 @@ public abstract class DBFlavor {
     this.dbName = dbName;
   }
 
-  public static DBFlavor fromJdbcUrl(String url) {
+  public static DBFlavor fromJdbcUrl(String url, Boolean isSerializable) {
     if (url.startsWith("jdbc:phoenix")) {
       return new PhoenixDBFlavor();
     }
-    return new DefaultDBFlavor();
+    return new DefaultDBFlavor(isSerializable);
   }
 
   /**
