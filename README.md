@@ -18,52 +18,53 @@ LICENSE file.
 
 YCSB
 ====================================
-[![Build Status](https://travis-ci.org/brianfrankcooper/YCSB.png?branch=master)](https://travis-ci.org/brianfrankcooper/YCSB)
 
 
+This repository contains the fork of [YCSB](https://ycsb.site) with the following additions:
+* Support for [YDB](https://ydb.tech) database
+* Multithreaded load phaze (tested with YDB only)
 
-Links
+To run YCSB with YDB, we recommend to use our [benchhelpers](https://github.com/ydb-platform/benchhelpers/blob/main/ycsb/README.md).
+
+Here is a prebuild YDB package: [ycsb-ydb-binding-0.18.0-SNAPSHOT.tar.gz](https://storage.yandexcloud.net/ydb-benchmark-builds/ycsb-ydb-binding-0.18.0-SNAPSHOT.tar.gz). It requires Java 13+.
+
+Original YCSB Links
 -----
-* To get here, use https://ycsb.site
-* [Our project docs](https://github.com/brianfrankcooper/YCSB/wiki)
+* https://ycsb.site
+* [project docs](https://github.com/brianfrankcooper/YCSB/wiki)
 * [The original announcement from Yahoo!](https://labs.yahoo.com/news/yahoo-cloud-serving-benchmark/)
 
 Getting Started
 ---------------
 
-1. Download the [latest release of YCSB](https://github.com/brianfrankcooper/YCSB/releases/latest):
+1. Download the [latest release of YCSB](https://storage.yandexcloud.net/ydb-benchmark-builds/ycsb-ydb-binding-0.18.0-SNAPSHOT.tar.gz):
 
     ```sh
-    curl -O --location https://github.com/brianfrankcooper/YCSB/releases/download/0.17.0/ycsb-0.17.0.tar.gz
-    tar xfvz ycsb-0.17.0.tar.gz
-    cd ycsb-0.17.0
+    curl -O --location https://storage.yandexcloud.net/ydb-benchmark-builds/ycsb-ydb-binding-0.18.0-SNAPSHOT.tar.gz
+    tar xfvz ycsb-ydb-binding-0.18.0-SNAPSHOT.tar.gz
+    cd ycsb-ydb-binding-0.18.0-SNAPSHOT
     ```
-    
-2. Set up a database to benchmark. There is a README file under each binding 
-   directory.
 
-3. Run YCSB command. 
+2. Run YCSB command. `threads` option depends on the machine, where you run the YCSB, as well as on YDB setup.
 
     On Linux:
     ```sh
-    bin/ycsb.sh load basic -P workloads/workloada
-    bin/ycsb.sh run basic -P workloads/workloada
+    YDB_ANONYMOUS_CREDENTIALS=1 ./bin/ycsb.sh load ydb -P workloads/workloada \
+        -p dsn=grpc://ydb_host:2135/Root/db1 \
+        -threads 10
+        -p dropOnInit=true -p import=true
+
+    YDB_ANONYMOUS_CREDENTIALS=1 ./bin/ycsb.sh run ydb -P workloads/workloada \
+        -p dsn=grpc://ydb_host:2135/Root/db1 \
+        -threads 128
+        -p maxexecutiontime=600
     ```
 
-    On Windows:
-    ```bat
-    bin/ycsb.bat load basic -P workloads\workloada
-    bin/ycsb.bat run basic -P workloads\workloada
-    ```
-
-  Running the `ycsb` command without any argument will print the usage. 
-   
-  See https://github.com/brianfrankcooper/YCSB/wiki/Running-a-Workload
+  See benchhelpers [documentation](https://github.com/ydb-platform/benchhelpers/blob/main/ycsb/README.md)
   for a detailed documentation on how to run a workload.
 
-  See https://github.com/brianfrankcooper/YCSB/wiki/Core-Properties for 
+  See [this](https://github.com/brianfrankcooper/YCSB/wiki/Core-Properties) for
   the list of available workload properties.
-
 
 Building from source
 --------------------
@@ -77,4 +78,4 @@ To build the full distribution, with all database bindings:
 
 To build a single database binding:
 
-    mvn -pl site.ycsb:mongodb-binding -am clean package
+    mvn -pl site.ycsb:ydb-binding -am clean package
