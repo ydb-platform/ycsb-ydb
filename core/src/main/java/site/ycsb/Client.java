@@ -281,11 +281,17 @@ public final class Client {
     String label = props.getProperty(LABEL_PROPERTY, "");
 
     long maxExecutionTime = Integer.parseInt(props.getProperty(MAX_EXECUTION_TIME, "0"));
+    boolean dotransactions = Boolean.valueOf(props.getProperty(DO_TRANSACTIONS_PROPERTY, String.valueOf(true)));
 
     //get number of threads, target and db
     int threadcount = Integer.parseInt(props.getProperty(THREAD_COUNT_PROPERTY, "1"));
     String dbname = props.getProperty(DB_PROPERTY, "site.ycsb.BasicDB");
     int target = Integer.parseInt(props.getProperty(TARGET_PROPERTY, "0"));
+
+    if (maxExecutionTime > 0 && !dotransactions) {
+      System.err.println("ERROR:  can't run multithreaded load with time limit");
+      System.exit(-1);
+    }
 
     //compute the target throughput
     double targetperthreadperms = -1;
@@ -299,17 +305,76 @@ public final class Client {
 
     Measurements.setProperties(props);
 
-    Workload workload = getWorkload(props);
+    int opcount;
+    if (dotransactions) {
+      opcount = Integer.parseInt(props.getProperty(OPERATION_COUNT_PROPERTY, "0"));
+    } else {
+      if (props.containsKey(INSERT_COUNT_PROPERTY)) {
+        opcount = Integer.parseInt(props.getProperty(INSERT_COUNT_PROPERTY, "0"));
+      } else {
+        opcount = Integer.parseInt(props.getProperty(RECORD_COUNT_PROPERTY, DEFAULT_RECORD_COUNT));
+      }
+    }
 
-    final Tracer tracer = getTracer(props, workload);
+    if (threadcount > opcount && opcount > 0){
+      threadcount = opcount;
+      props.setProperty(THREAD_COUNT_PROPERTY, String.valueOf(threadcount));
+      System.out.println("Warning: the threadcount is bigger than recordcount, the threadcount will be recordcount!");
+    }
 
-    initWorkload(props, warningthread, workload, tracer);
+    final Tracer tracer;
+
+    // will contain multiple workloads only when using multi-threaded load
+    List<Workload> workloads;
+    List<Properties> workloadProperties;
+
+    if (!dotransactions && threadcount > 1) {
+      // new multithreaded load (quick hack)
+      tracer = getTracerForLoad(props);
+
+      workloads = new ArrayList<>(threadcount);
+      workloadProperties = new ArrayList<>(threadcount);
+
+      int opsPerThread = opcount / threadcount;
+      int currentStart = 0;
+      for (int i = 0; i < threadcount; i++) {
+        Properties copyProps = (Properties) props.clone();
+        workloadProperties.add(copyProps);
+
+        int currentInsertCount;
+        if (i == threadcount - 1) {
+          currentInsertCount = opcount - currentStart;
+        } else {
+          currentInsertCount = opsPerThread;
+        }
+
+        copyProps.setProperty(INSERT_COUNT_PROPERTY, String.valueOf(currentInsertCount));
+        copyProps.setProperty(Workload.INSERT_START_PROPERTY, String.valueOf(currentStart));
+
+        Workload workload = getWorkload(copyProps);
+        initWorkload(copyProps, workload, tracer);
+        workloads.add(workload);
+
+        currentStart += currentInsertCount;
+      }
+    } else {
+      // regular run or original load with single thread
+      Workload workload = getWorkload(props);
+      tracer = getTracer(props, workload);
+      initWorkload(props, warningthread, workload, tracer);
+
+      workloads = new ArrayList<>(1);
+      workloads.add(workload);
+
+      workloadProperties = new ArrayList<>(1);
+      workloadProperties.add(props);
+    }
 
     System.err.println("Starting test.");
     final CountDownLatch completeLatch = new CountDownLatch(threadcount);
 
-    final List<ClientThread> clients = initDb(dbname, props, threadcount, targetperthreadperms,
-        workload, tracer, completeLatch);
+    final List<ClientThread> clients = initDb(dbname, workloadProperties, threadcount, targetperthreadperms,
+        workloads, tracer, completeLatch);
 
     if (status) {
       boolean standardstatus = false;
@@ -343,7 +408,8 @@ public final class Client {
       }
 
       if (maxExecutionTime > 0) {
-        terminator = new TerminatorThread(maxExecutionTime, threads.keySet(), workload);
+        // note that there is only single workload in this case
+        terminator = new TerminatorThread(maxExecutionTime, threads.keySet(), workloads.get(0));
         terminator.start();
       }
 
@@ -379,7 +445,9 @@ public final class Client {
           }
         }
 
-        workload.cleanup();
+        for (Workload workload : workloads) {
+          workload.cleanup();
+        }
       }
     } catch (WorkloadException e) {
       e.printStackTrace();
@@ -400,29 +468,17 @@ public final class Client {
     System.exit(0);
   }
 
-  private static List<ClientThread> initDb(String dbname, Properties props, int threadcount,
-                                           double targetperthreadperms, Workload workload, Tracer tracer,
+  private static List<ClientThread> initDb(String dbname,  List<Properties> workloadProperties, int threadcount,
+                                           double targetperthreadperms, List<Workload> workloads, Tracer tracer,
                                            CountDownLatch completeLatch) {
     boolean initFailed = false;
-    boolean dotransactions = Boolean.valueOf(props.getProperty(DO_TRANSACTIONS_PROPERTY, String.valueOf(true)));
+    boolean dotransactions = Boolean.valueOf(
+        workloadProperties.get(0).getProperty(DO_TRANSACTIONS_PROPERTY, String.valueOf(true)));
 
     final List<ClientThread> clients = new ArrayList<>(threadcount);
     try (final TraceScope span = tracer.newScope(CLIENT_INIT_SPAN)) {
-      int opcount;
-      if (dotransactions) {
-        opcount = Integer.parseInt(props.getProperty(OPERATION_COUNT_PROPERTY, "0"));
-      } else {
-        if (props.containsKey(INSERT_COUNT_PROPERTY)) {
-          opcount = Integer.parseInt(props.getProperty(INSERT_COUNT_PROPERTY, "0"));
-        } else {
-          opcount = Integer.parseInt(props.getProperty(RECORD_COUNT_PROPERTY, DEFAULT_RECORD_COUNT));
-        }
-      }
-      if (threadcount > opcount && opcount > 0){
-        threadcount = opcount;
-        System.out.println("Warning: the threadcount is bigger than recordcount, the threadcount will be recordcount!");
-      }
       for (int threadid = 0; threadid < threadcount; threadid++) {
+        Properties props = workloadProperties.get(threadid % workloadProperties.size());
         DB db;
         try {
           db = DBFactory.newDB(dbname, props, tracer);
@@ -432,12 +488,37 @@ public final class Client {
           break;
         }
 
-        int threadopcount = opcount / threadcount;
+        int threadopcount;
 
-        // ensure correct number of operations, in case opcount is not a multiple of threadcount
-        if (threadid < opcount % threadcount) {
-          ++threadopcount;
+        // hacky: for multithreaded loads we use per thread workload and workload properties,
+        // but for the run phase we use the first ones only and calculate per thread opcount (original code).
+        //
+        // In other words we treat INSERT_COUNT_PROPERTY as per thread value in new multithreaded load,
+        // but as total value in the original load.
+        if (!dotransactions && threadcount > 1) {
+          threadopcount = Integer.parseInt(props.getProperty(INSERT_COUNT_PROPERTY, "0"));
+        } else {
+          // the original implementation of the single threaded load or multithreaded run phase
+          int opcount;
+
+          if (dotransactions) {
+            opcount = Integer.parseInt(props.getProperty(OPERATION_COUNT_PROPERTY, "0"));
+          } else {
+            if (props.containsKey(INSERT_COUNT_PROPERTY)) {
+              opcount = Integer.parseInt(props.getProperty(INSERT_COUNT_PROPERTY, "0"));
+            } else {
+              opcount = Integer.parseInt(props.getProperty(RECORD_COUNT_PROPERTY, DEFAULT_RECORD_COUNT));
+            }
+          }
+
+          threadopcount = opcount / threadcount;
+          // ensure correct number of operations, in case opcount is not a multiple of threadcount
+          if (threadid < opcount % threadcount) {
+            ++threadopcount;
+          }
         }
+
+        Workload workload = workloads.get(threadid % workloads.size());
 
         ClientThread t = new ClientThread(db, dotransactions, workload, props, threadopcount, targetperthreadperms,
             completeLatch);
@@ -460,11 +541,29 @@ public final class Client {
         .build();
   }
 
+  private static Tracer getTracerForLoad(Properties props) {
+    return new Tracer.Builder("YCSB load")
+        .conf(getHTraceConfiguration(props))
+        .build();
+  }
+
   private static void initWorkload(Properties props, Thread warningthread, Workload workload, Tracer tracer) {
     try {
       try (final TraceScope span = tracer.newScope(CLIENT_WORKLOAD_INIT_SPAN)) {
         workload.init(props);
         warningthread.interrupt();
+      }
+    } catch (WorkloadException e) {
+      e.printStackTrace();
+      e.printStackTrace(System.out);
+      System.exit(0);
+    }
+  }
+
+  private static void initWorkload(Properties props, Workload workload, Tracer tracer) {
+    try {
+      try (final TraceScope span = tracer.newScope(CLIENT_WORKLOAD_INIT_SPAN)) {
+        workload.init(props);
       }
     } catch (WorkloadException e) {
       e.printStackTrace();

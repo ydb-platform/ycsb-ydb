@@ -47,15 +47,20 @@ public class YDBConnection {
   private static final String KEY_DSN = "dsn";
   private static final String KEY_TOKEN = "token";
 
-  private static final Map<Properties, YDBConnection> CACHE = new HashMap<>();
+  private static final Map<String, YDBConnection> CACHE = new HashMap<>();
 
   public static YDBConnection openConnection(Properties props) throws DBException {
     synchronized (CACHE) {
-      YDBConnection connection = CACHE.get(props);
+      String url = props.getProperty(KEY_DSN, null);
+      if (url == null) {
+        throw new DBException("ERROR: Missing data source name");
+      }
+
+      YDBConnection connection = CACHE.get(url);
       if (connection == null) {
         connection = createConnection(props);
         connection.addTable(new YDBTable(props));
-        CACHE.put(props, connection);
+        CACHE.put(url, connection);
       }
       connection.register();
       return connection;
