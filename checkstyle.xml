@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<!-- 
+<!--
 Copyright (c) 2012 - 2016 YCSB contributors. All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License"); you
@@ -120,7 +120,6 @@ LICENSE file.
         <module name="LineLength">
             <property name="max" value="120"/>
         </module>
-        <module name="MethodLength"/>
         <module name="ParameterNumber"/>
 
 
@@ -184,7 +183,7 @@ LICENSE file.
         <module name="Indentation">
             <property name="basicOffset" value="2" />
             <property name="caseIndent" value="0" />
-        </module> 
+        </module>
         <!-- <module name="TodoComment"/> -->
         <module name="UpperEll"/>
 
