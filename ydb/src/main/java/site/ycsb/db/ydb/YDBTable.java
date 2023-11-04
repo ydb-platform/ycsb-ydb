@@ -59,10 +59,9 @@ public class YDBTable {
   private static final String KEY_DO_COMPRESSION_DEFAULT = "";
 
   private static final String KEY_DO_PRESPLIT = "presplitTable";
-  private static final String KEY_DO_PRESPLIT_DEFAULT = "";
+  private static final String KEY_DO_PRESPLIT_DEFAULT = "true";
 
-  private static final String MAX_PARTITION_SIZE = "2000"; // 2 GB
-  private static final String MAX_PARTITIONS_COUNT = "1000";
+  private static final String MAX_PARTITION_SIZE_MB = "2000";
 
   private final String tableName;
   private final String keyColumnName;
@@ -86,8 +85,9 @@ public class YDBTable {
       columnNames.add(fieldPrefix + i);
     }
 
-    this.tableDescription = createTableDescription(props, keyColumnName, columnNames);
-    this.createTableSettings = createTableSettings(props, this.tableDescription);
+    this.createTableSettings = createTableSettings(props);
+    this.tableDescription = createTableDescription(props, keyColumnName, columnNames, this.createTableSettings);
+
     this.dropOnInit = Boolean.parseBoolean(props.getProperty(KEY_DROP_ON_INIT, KEY_DROP_ON_INIT_DEFAULT));
     this.dropOnClean = Boolean.parseBoolean(props.getProperty(KEY_DROP_ON_CLEAN, KEY_DROP_ON_CLEAN_DEFAULT));
   }
@@ -146,7 +146,7 @@ public class YDBTable {
   }
 
   private static TableDescription createTableDescription(
-      Properties props, String keyColumnName, List<String> columnNames) {
+      Properties props, String keyColumnName, List<String> columnNames, CreateTableSettings createTableSettings) {
     String compressionDevice = props.getProperty(KEY_DO_COMPRESSION, KEY_DO_COMPRESSION_DEFAULT);
 
     TableDescription.Builder builder = TableDescription.newBuilder();
@@ -177,18 +177,16 @@ public class YDBTable {
       settings.setMaxPartitionsCount(maxParts);
     }
 
-    int threads = Integer.parseInt(props.getProperty(Client.THREAD_COUNT_PROPERTY, "1"));
-    if (threads > 1) {
-      int minParts = threads;
-      if (maxParts != 0 && maxParts < minParts) {
-        minParts = maxParts;
-      }
-      settings.setMinPartitionsCount(minParts);
+    int minParts = createTableSettings.getPartitioningPolicy().getExplicitPartitioningPoints().size() + 1;
+    if (maxParts != 0 && maxParts < minParts) {
+      minParts = maxParts;
     }
+    settings.setMinPartitionsCount(minParts);
 
     final boolean splitBySize = Boolean.parseBoolean(props.getProperty("splitBySize", "true"));
+    final int maxPartSizeMB = Integer.parseInt(props.getProperty("maxpartsizeMB", MAX_PARTITION_SIZE_MB));
+
     if (splitBySize) {
-      int maxPartSizeMB = Integer.parseInt(props.getProperty("maxpartsizeMB", MAX_PARTITION_SIZE));
       settings.setPartitionSize(maxPartSizeMB);
       settings.setPartitioningBySize(true);
     }
@@ -199,34 +197,34 @@ public class YDBTable {
     return builder.build();
   }
 
-  private static CreateTableSettings createTableSettings(Properties props, TableDescription description) {
-    Long maxParts = description.getPartitioningSettings().getMaxPartitionsCount();
+  private static CreateTableSettings createTableSettings(Properties props) {
     int threads = Integer.parseInt(props.getProperty(Client.THREAD_COUNT_PROPERTY, "1"));
-    final boolean dosplit = Boolean.parseBoolean(props.getProperty(KEY_DO_PRESPLIT, KEY_DO_PRESPLIT_DEFAULT));
-    boolean hasManyParts = maxParts == null || maxParts == 0 || maxParts > 1;
-
-    if (!dosplit || !hasManyParts || threads <= 1) {
-      return new CreateTableSettings();
-    }
-
-    int rangecount = 0;
-    if (maxParts != null) {
-      rangecount = (int)maxParts.longValue();
-    }
-    if (rangecount == 0) {
-      rangecount = threads;
-    }
-    // note that rangecount > 1
 
     final int zeropadding =
         Integer.parseInt(
             props.getProperty(CoreWorkload.ZERO_PADDING_PROPERTY, CoreWorkload.ZERO_PADDING_PROPERTY_DEFAULT));
 
-    long recordcount =
-        Long.parseLong(props.getProperty(Client.RECORD_COUNT_PROPERTY, Client.DEFAULT_RECORD_COUNT));
-    if (recordcount == 0) {
-      recordcount = Integer.MAX_VALUE;
+    final boolean dotransactions = Boolean.valueOf(
+        props.getProperty(Client.DO_TRANSACTIONS_PROPERTY, String.valueOf(true)));
+
+    long recordcount;
+    if (!dotransactions && threads > 1) {
+      // this is the multithreaded loading phase
+      int perThreadRows = Integer.parseInt(props.getProperty(Client.INSERT_COUNT_PROPERTY));
+
+      // approximate because of rounding errors
+      recordcount = perThreadRows * threads;
+    } else {
+      if (props.containsKey(Client.INSERT_COUNT_PROPERTY)) {
+        recordcount = Integer.parseInt(props.getProperty(Client.INSERT_COUNT_PROPERTY, "0"));
+      } else {
+        recordcount = Integer.parseInt(props.getProperty(Client.RECORD_COUNT_PROPERTY, Client.DEFAULT_RECORD_COUNT));
+      }
     }
+
+    final int maxPartSizeMB = Integer.parseInt(props.getProperty("maxpartsizeMB", MAX_PARTITION_SIZE_MB));
+    final int recordsSizeMB = (int)(recordcount / 1024); // TODO: we assume 1 KB rows (which is default)
+    final int rangecount = recordsSizeMB / maxPartSizeMB + 1;
 
     boolean orderedinserts;
     final String orderedprop =
@@ -247,10 +245,8 @@ public class YDBTable {
       splitKeys[i] = CoreWorkload.buildKeyName(keynum, zeropadding, orderedinserts);
     }
 
-    if (!orderedinserts) {
-      // keys are hashes, need to sort
-      Arrays.sort(splitKeys);
-    }
+    // always sort keys, because even for ordered inserts we might not have zero padding
+    Arrays.sort(splitKeys);
 
     PartitioningPolicy policy = new PartitioningPolicy();
     for (int i = 0; i < splitKeysSize; ++i) {
