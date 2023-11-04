@@ -92,7 +92,7 @@ public class ClientThread implements Runnable {
     } catch (DBException e) {
       e.printStackTrace();
       e.printStackTrace(System.out);
-      return;
+      System.exit(-1);
     }
 
     try {
@@ -133,7 +133,8 @@ public class ClientThread implements Runnable {
         while (((opcount == 0) || (opsdone < opcount)) && !workload.isStopRequested()) {
 
           if (!workload.doInsert(db, workloadstate)) {
-            break;
+            System.err.println("Failed to insert initial data");
+            System.exit(-1);
           }
 
           opsdone++;
@@ -144,7 +145,7 @@ public class ClientThread implements Runnable {
     } catch (Exception e) {
       e.printStackTrace();
       e.printStackTrace(System.out);
-      System.exit(0);
+      System.exit(-1);
     }
 
     try {
