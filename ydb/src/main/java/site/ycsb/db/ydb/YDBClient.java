@@ -101,7 +101,12 @@ public class YDBClient extends DB {
       properties.setProperty("forceUpsert", "true");
       properties.setProperty("bulkUpsert", "true");
       properties.setProperty("bulkUpsertBatchSize", "1000");
-      properties.setProperty("presplitTable", "true");
+
+      final boolean presplitTable = Boolean.parseBoolean(
+          properties.getProperty(YDBTable.KEY_DO_PRESPLIT, YDBTable.KEY_DO_PRESPLIT_DEFAULT));
+      if (presplitTable) {
+        properties.setProperty(YDBTable.KEY_DO_PRESPLIT, "true");
+      }
 
       int insertInflight = Integer.parseInt(properties.getProperty("insertInflight", "2"));
       properties.setProperty("insertInflight", String.valueOf(insertInflight));

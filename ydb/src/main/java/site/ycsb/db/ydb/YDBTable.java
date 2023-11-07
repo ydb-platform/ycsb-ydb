@@ -58,8 +58,8 @@ public class YDBTable {
   private static final String KEY_DO_COMPRESSION = "compression";
   private static final String KEY_DO_COMPRESSION_DEFAULT = "";
 
-  private static final String KEY_DO_PRESPLIT = "presplitTable";
-  private static final String KEY_DO_PRESPLIT_DEFAULT = "true";
+  public static final String KEY_DO_PRESPLIT = "presplitTable";
+  public static final String KEY_DO_PRESPLIT_DEFAULT = "true";
 
   private static final String MAX_PARTITION_SIZE_MB = "2000";
 
@@ -177,11 +177,17 @@ public class YDBTable {
       settings.setMaxPartitionsCount(maxParts);
     }
 
-    int minParts = createTableSettings.getPartitioningPolicy().getExplicitPartitioningPoints().size() + 1;
-    if (maxParts != 0 && maxParts < minParts) {
-      minParts = maxParts;
+    PartitioningPolicy policy = createTableSettings.getPartitioningPolicy();
+    if (policy != null) {
+      List<TupleValue> partitionPoints = policy.getExplicitPartitioningPoints();
+      if (partitionPoints != null) {
+        int minParts = createTableSettings.getPartitioningPolicy().getExplicitPartitioningPoints().size() + 1;
+        if (maxParts != 0 && maxParts < minParts) {
+          minParts = maxParts;
+        }
+        settings.setMinPartitionsCount(minParts);
+      }
     }
-    settings.setMinPartitionsCount(minParts);
 
     final boolean splitBySize = Boolean.parseBoolean(props.getProperty("splitBySize", "true"));
     final int maxPartSizeMB = Integer.parseInt(props.getProperty("maxpartsizeMB", MAX_PARTITION_SIZE_MB));
@@ -198,6 +204,11 @@ public class YDBTable {
   }
 
   private static CreateTableSettings createTableSettings(Properties props) {
+    final boolean presplitTable = Boolean.parseBoolean(props.getProperty(KEY_DO_PRESPLIT, KEY_DO_PRESPLIT_DEFAULT));
+    if (!presplitTable) {
+      return new CreateTableSettings();
+    }
+
     int threads = Integer.parseInt(props.getProperty(Client.THREAD_COUNT_PROPERTY, "1"));
 
     final int zeropadding =
