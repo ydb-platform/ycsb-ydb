@@ -21,6 +21,13 @@
  */
 package site.ycsb.db.ydb;
 
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import site.ycsb.*;
 import tech.ydb.core.Result;
 import tech.ydb.core.StatusCode;
@@ -29,31 +36,16 @@ import tech.ydb.table.query.DataQueryResult;
 import tech.ydb.table.query.Params;
 import tech.ydb.table.result.ResultSetReader;
 import tech.ydb.table.transaction.TxControl;
+import tech.ydb.table.values.ListType;
 import tech.ydb.table.values.ListValue;
+import tech.ydb.table.values.OptionalType;
+import tech.ydb.table.values.OptionalValue;
 import tech.ydb.table.values.PrimitiveType;
 import tech.ydb.table.values.PrimitiveValue;
 import tech.ydb.table.values.StructType;
+import tech.ydb.table.values.StructValue;
 import tech.ydb.table.values.Type;
 import tech.ydb.table.values.Value;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.util.*;
-import java.util.stream.Collectors;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Properties;
-import java.util.Set;
-import java.util.Vector;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.atomic.AtomicLong;
-
-import tech.ydb.table.values.ListType;
-import tech.ydb.table.values.OptionalType;
-import tech.ydb.table.values.OptionalValue;
-import tech.ydb.table.values.StructValue;
 
 /**
  * YDB client implementation.
@@ -84,7 +76,7 @@ public class YDBClient extends DB {
 
   private Semaphore inflightSemaphore = null;
 
-  private final List<Map<String, Value>> bulkBatch = new ArrayList<>();
+  private final List<Map<String, Value<?>>> bulkBatch = new ArrayList<>();
 
   // YDB connection staff
   private YDBConnection connection;
@@ -423,7 +415,7 @@ public class YDBClient extends DB {
   }
 
   private Status bulkUpsertBatched(YDBTable ydbTable, String key, Map<String, ByteIterator> values) {
-    Map<String, Value> ydbValues = new HashMap<>();
+    Map<String, Value<?>> ydbValues = new HashMap<>();
     ydbValues.put(ydbTable.keyColumnName(), PrimitiveValue.newText(key));
 
     values.forEach((column, bytes) -> {
@@ -455,7 +447,7 @@ public class YDBClient extends DB {
     }
 
     final Map<String, Type> ydbTypes = new HashMap<>();
-    final Map<String, Value> ydbValues = new HashMap<>();
+    final Map<String, Value<?>> ydbValues = new HashMap<>();
 
     ydbTypes.put(ydbTable.keyColumnName(), PrimitiveType.Text);
     ydbValues.put(ydbTable.keyColumnName(), PrimitiveValue.newText(key));
