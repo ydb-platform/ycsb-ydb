@@ -35,6 +35,8 @@ import tech.ydb.auth.iam.CloudAuthHelper;
 import tech.ydb.core.Result;
 import tech.ydb.core.Status;
 import tech.ydb.core.grpc.GrpcTransport;
+import tech.ydb.query.QueryClient;
+import tech.ydb.query.QuerySession;
 import tech.ydb.table.Session;
 import tech.ydb.table.SessionRetryContext;
 import tech.ydb.table.TableClient;
@@ -71,17 +73,22 @@ public class YDBConnection {
 
   private final GrpcTransport transport;
   private final TableClient tableClient;
+  private final QueryClient queryClient;
+
   private final SessionRetryContext retryCtx;
+  private final tech.ydb.query.retry.SessionRetryContext queryRetryCtx;
   private final int inflightSize;
 
   private final Map<String, YDBTable> tables = new HashMap<>();
 
   private final AtomicInteger clientCounter = new AtomicInteger(0);
 
-  public YDBConnection(GrpcTransport transport, TableClient tableClient, int inflightSize) {
+  public YDBConnection(GrpcTransport transport, TableClient tableClient, QueryClient queryClient, int inflightSize) {
     this.transport = transport;
     this.tableClient = tableClient;
+    this.queryClient = queryClient;
     this.retryCtx = SessionRetryContext.create(tableClient).build();
+    this.queryRetryCtx = tech.ydb.query.retry.SessionRetryContext.create(queryClient).build();
     this.inflightSize = inflightSize;
   }
 
@@ -110,6 +117,7 @@ public class YDBConnection {
       for (YDBTable table: tables.values()) {
         table.clean(this);
       }
+      queryClient.close();
       tableClient.close();
       transport.close();
       return true;
@@ -136,6 +144,14 @@ public class YDBConnection {
 
   public CompletableFuture<Status> executeStatus(Function<Session, CompletableFuture<Status>> fn) {
     return retryCtx.supplyStatus(fn);
+  }
+
+  public <T> CompletableFuture<Result<T>> executeQueryResult(Function<QuerySession, CompletableFuture<Result<T>>> fn) {
+    return queryRetryCtx.supplyResult(fn);
+  }
+
+  public CompletableFuture<Status> executeQueryStatus(Function<QuerySession, CompletableFuture<Status>> fn) {
+    return queryRetryCtx.supplyStatus(fn);
   }
 
   private static YDBConnection createConnection(Properties props) throws DBException {
@@ -172,7 +188,12 @@ public class YDBConnection {
           .sessionPoolSize(0, maxPoolSize)
           .build();
 
-      return new YDBConnection(transport, tableClient, inflightSize);
+      QueryClient queryClient = QueryClient.newClient(transport)
+          .sessionPoolMinSize(0)
+          .sessionPoolMaxSize(maxPoolSize)
+          .build();
+
+      return new YDBConnection(transport, tableClient, queryClient, inflightSize);
     } catch (RuntimeException ex) {
       transport.close();
       throw ex;
