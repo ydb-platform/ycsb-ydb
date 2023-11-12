@@ -76,7 +76,7 @@ public class YDBConnection {
   private final QueryClient queryClient;
 
   private final SessionRetryContext retryCtx;
-  private final tech.ydb.query.retry.SessionRetryContext queryRetryCtx;
+  private final tech.ydb.query.tools.SessionRetryContext queryRetryCtx;
   private final int inflightSize;
 
   private final Map<String, YDBTable> tables = new HashMap<>();
@@ -88,7 +88,7 @@ public class YDBConnection {
     this.tableClient = tableClient;
     this.queryClient = queryClient;
     this.retryCtx = SessionRetryContext.create(tableClient).build();
-    this.queryRetryCtx = tech.ydb.query.retry.SessionRetryContext.create(queryClient).build();
+    this.queryRetryCtx = tech.ydb.query.tools.SessionRetryContext.create(queryClient).build();
     this.inflightSize = inflightSize;
   }
 
