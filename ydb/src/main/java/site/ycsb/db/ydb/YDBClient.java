@@ -94,7 +94,8 @@ public class YDBClient extends DB {
       properties.setProperty("preparedInsertUpdateQueries", "true");
       properties.setProperty("forceUpsert", "true");
       properties.setProperty("bulkUpsert", "true");
-      properties.setProperty("forceQueryService", "false");
+      properties.setProperty("useKV", "false");
+      properties.setProperty("useQueryService", "false");
       properties.setProperty("bulkUpsertBatchSize", "1000");
 
       final boolean presplitTable = Boolean.parseBoolean(
@@ -112,8 +113,9 @@ public class YDBClient extends DB {
     usePreparedUpdateInsert = Boolean.parseBoolean(properties.getProperty("preparedInsertUpdateQueries", "true"));
     forceUpsert = Boolean.parseBoolean(properties.getProperty("forceUpsert", "false"));
     useBulkUpsert = Boolean.parseBoolean(properties.getProperty("bulkUpsert", "false"));
-    useKV = Boolean.parseBoolean(properties.getProperty("useKV", "false"));
     bulkUpsertBatchSize = Integer.parseInt(properties.getProperty("bulkUpsertBatchSize", "1"));
+
+    useKV = Boolean.parseBoolean(properties.getProperty("useKV", "false"));
     useQueryService = Boolean.parseBoolean(properties.getProperty("useQueryService", "false"));
 
     forceUpdate = Boolean.parseBoolean(properties.getProperty("forceUpdate", "false"));
@@ -173,7 +175,7 @@ public class YDBClient extends DB {
         return session.executeQuery(query, TxMode.serializableRw(), params).start(part -> {
             readers.add(part.getResultSetReader());
           });
-      }).join().expectSuccess("execute read table problem");
+      }).join().expectSuccess("execute query service problem");
 
     return readers;
   }
@@ -391,8 +393,7 @@ public class YDBClient extends DB {
     }
   }
 
-  private Status updatePrepared(
-      String table, String key, Map<String, ByteIterator> values) {
+  private Status updatePrepared(String table, String key, Map<String, ByteIterator> values) {
     YDBTable ydbTable = connection.findTable(table);
 
     final StringBuilder queryDeclare = new StringBuilder();
@@ -416,8 +417,7 @@ public class YDBClient extends DB {
     return executeQuery(query, params, "update");
   }
 
-  private Status insertOrUpsertPrepared(
-      String table, String key, Map<String, ByteIterator> values, String op) {
+  private Status insertOrUpsertPrepared(String table, String key, Map<String, ByteIterator> values, String op) {
     YDBTable ydbTable = connection.findTable(table);
 
     final StringBuilder queryDeclare = new StringBuilder();
@@ -443,8 +443,7 @@ public class YDBClient extends DB {
     return executeQuery(query, params, op);
   }
 
-  private Status insertOrUpsertNotPrepared(
-      String table, String key, Map<String, ByteIterator> values, String op) {
+  private Status insertOrUpsertNotPrepared(String table, String key, Map<String, ByteIterator> values, String op) {
     YDBTable ydbTable = connection.findTable(table);
 
     final StringBuilder queryColumns = new StringBuilder();
