@@ -34,7 +34,10 @@ import tech.ydb.core.StatusCode;
 import tech.ydb.core.UnexpectedResultException;
 import tech.ydb.table.query.DataQueryResult;
 import tech.ydb.table.query.Params;
+import tech.ydb.table.query.ReadRowsResult;
 import tech.ydb.table.result.ResultSetReader;
+import tech.ydb.table.settings.ReadRowsSettings;
+import tech.ydb.table.settings.ReadTableSettings;
 import tech.ydb.table.transaction.TxControl;
 import tech.ydb.table.values.ListType;
 import tech.ydb.table.values.ListValue;
@@ -58,16 +61,13 @@ public class YDBClient extends DB {
   private static boolean forceUpsert = false;
   private static boolean forceUpdate = false;
   private static boolean useBulkUpsert = false;
+  private static boolean useKV = false;
   private static int bulkUpsertBatchSize = 1;
 
   // all threads must report to this on cleanup
   private static final AtomicLong TOTAL_OKS = new AtomicLong(0);
   private static final AtomicLong TOTAL_ERRORS = new AtomicLong(0);
   private static final AtomicLong TOTAL_NOT_FOUNDS = new AtomicLong(0);
-
-  // TODO: by default we always read all fields, but it is better
-  // to cache query per field set
-  private static final String READ_QUERY = "DECLARE $key as Text; SELECT * FROM usertable WHERE id = $key;";
 
   // per instance counters
   private long oks = 0;
@@ -109,6 +109,7 @@ public class YDBClient extends DB {
     usePreparedUpdateInsert = Boolean.parseBoolean(properties.getProperty("preparedInsertUpdateQueries", "true"));
     forceUpsert = Boolean.parseBoolean(properties.getProperty("forceUpsert", "false"));
     useBulkUpsert = Boolean.parseBoolean(properties.getProperty("bulkUpsert", "false"));
+    useKV = Boolean.parseBoolean(properties.getProperty("useKV", "false"));
     bulkUpsertBatchSize = Integer.parseInt(properties.getProperty("bulkUpsertBatchSize", "1"));
 
     forceUpdate = Boolean.parseBoolean(properties.getProperty("forceUpdate", "false"));
@@ -147,31 +148,65 @@ public class YDBClient extends DB {
     }
   }
 
+  private ResultSetReader readRowByKV(YDBTable table, String key, Set<String> fields) {
+    String tablePath = connection.getDatabase() + "/" + table.name();
+    List<String> columns = fields == null || fields.isEmpty() ? table.columnNames() : new ArrayList<>(fields);
+
+    ReadRowsSettings settings = ReadRowsSettings.newBuilder()
+        .addColumns(columns)
+        .addKey(StructValue.of(table.keyColumnName(), PrimitiveValue.newText(key)))
+        .build();
+
+    Result<ReadRowsResult> resultWrapped = connection.executeResult(
+        session -> session.readRows(tablePath, settings)
+    ).join();
+    resultWrapped.getStatus().expectSuccess("execute readRows method");
+    return resultWrapped.getValue().getResultSetReader();
+  }
+
+  private ResultSetReader readRow(YDBTable table, String key, Set<String> fields) {
+    String fieldsString = "*";
+    if (fields != null && !fields.isEmpty()) {
+      fieldsString = String.join(",", fields);
+    }
+
+    String query = "DECLARE $key as Text; "
+        + " SELECT " + fieldsString + " FROM " + table.name()
+        + " WHERE " + table.keyColumnName() + " = $key;";
+
+    LOGGER.trace(query);
+
+    Params params = Params.of("$key", PrimitiveValue.newText(key));
+
+    TxControl txControl = TxControl.serializableRw().setCommitTx(true);
+
+    Result<DataQueryResult> resultWrapped = connection.executeResult(
+        session -> session.executeDataQuery(query, txControl, params))
+        .join();
+    resultWrapped.getStatus().expectSuccess("execute read query");
+    DataQueryResult queryResult = resultWrapped.getValue();
+
+    if (queryResult.getResultSetCount() == 0) {
+      return null;
+    }
+
+    return queryResult.getResultSet(0);
+  }
+
   @Override
   public Status read(String table, String key, Set<String> fields, Map<String, ByteIterator> result) {
     LOGGER.debug("read table {} with key {}", table, key);
     YDBTable ydbTable = connection.findTable(table);
 
-    Params params = Params.of("$key", PrimitiveValue.newText(key));
-
-    LOGGER.trace(READ_QUERY);
-
-    TxControl txControl = TxControl.serializableRw().setCommitTx(true);
-
     try {
-      Result<DataQueryResult> resultWrapped = connection.executeResult(
-          session -> session.executeDataQuery(READ_QUERY, txControl, params))
-          .join();
-      resultWrapped.getStatus().expectSuccess("execute read query");
-      DataQueryResult queryResult = resultWrapped.getValue();
-
-      if (queryResult.getResultSetCount() == 0) {
-        ++notFound;
-        return Status.NOT_FOUND;
+      ResultSetReader rs;
+      if (useKV) {
+        rs = readRowByKV(ydbTable, key, fields);
+      } else {
+        rs = readRow(ydbTable, key, fields);
       }
 
-      ResultSetReader rs = queryResult.getResultSet(0);
-      if (rs.getRowCount() == 0) {
+      if (rs == null || rs.getRowCount() == 0) {
         ++notFound;
         return Status.NOT_FOUND;
       }
@@ -198,19 +233,34 @@ public class YDBClient extends DB {
     return Status.OK;
   }
 
-  @Override
-  public Status scan(String table, String startkey, int recordcount, Set<String> fields,
-      Vector<HashMap<String, ByteIterator>> result) {
-    LOGGER.debug("scan table {} from key {} and size {}", table, startkey, recordcount);
-    YDBTable ydbTable = connection.findTable(table);
+  private List<ResultSetReader> scanRowsByKV(YDBTable table, String startkey, int recordcount, Set<String> fields) {
+    String tablePath = connection.getDatabase() + "/" + table.name();
+    List<String> columns = fields == null || fields.isEmpty() ? table.columnNames() : new ArrayList<>(fields);
+    ReadTableSettings settings = ReadTableSettings.newBuilder()
+        .fromKeyInclusive(PrimitiveValue.newText(startkey))
+        .rowLimit(recordcount)
+        .columns(columns)
+        .build();
 
+    List<ResultSetReader> readers = new ArrayList<>();
+    connection.executeStatus(session -> {
+        readers.clear();
+        return session.executeReadTable(tablePath, settings).start(part -> {
+            readers.add(part.getResultSetReader());
+          });
+      }).join().expectSuccess("execute read table problem");
+
+    return readers;
+  }
+
+  private List<ResultSetReader> scanRows(YDBTable table, String startkey, int recordcount, Set<String> fields) {
     String fieldsString = "*";
     if (fields != null && !fields.isEmpty()) {
       fieldsString = String.join(",", fields);
     }
     String query = "DECLARE $startKey as Text; DECLARE $limit as Uint32;"
-        + " SELECT " + fieldsString + " FROM " + ydbTable.name()
-        + " WHERE " + ydbTable.keyColumnName() + " >= $startKey"
+        + " SELECT " + fieldsString + " FROM " + table.name()
+        + " WHERE " + table.keyColumnName() + " >= $startKey"
         + " LIMIT $limit;";
 
     Params params = Params.of(
@@ -221,28 +271,54 @@ public class YDBClient extends DB {
 
     TxControl txControl = TxControl.serializableRw().setCommitTx(true);
 
-    try {
-      Result<DataQueryResult> resultWrapped = connection.executeResult(
-          session -> session.executeDataQuery(query, txControl, params))
-          .join();
-      resultWrapped.getStatus().expectSuccess("execute scan query");
-      DataQueryResult queryResult = resultWrapped.getValue();
+    Result<DataQueryResult> resultWrapped = connection.executeResult(
+        session -> session.executeDataQuery(query, txControl, params))
+        .join();
+    resultWrapped.getStatus().expectSuccess("execute scan query");
+    DataQueryResult queryResult = resultWrapped.getValue();
 
-      ResultSetReader rs = queryResult.getResultSet(0);
-      final int keyColumnIndex = rs.getColumnIndex(ydbTable.keyColumnName());
-      result.ensureCapacity(rs.getRowCount());
-      while (rs.next()) {
-        HashMap<String, ByteIterator> columns = new HashMap<>();
-        for (int i = 0; i < rs.getColumnCount(); ++i) {
-          if (i == keyColumnIndex) {
-            final byte[] val = rs.getColumn(i).getText().getBytes();
-            columns.put(rs.getColumnName(i), new ByteArrayByteIterator(val));
-          } else {
-            final byte[] val = rs.getColumn(i).getBytes();
-            columns.put(rs.getColumnName(i), new ByteArrayByteIterator(val));
+    List<ResultSetReader> readers = new ArrayList<>();
+    for (int idx = 0; idx <= queryResult.getResultSetCount(); idx += 1) {
+      readers.add(queryResult.getResultSet(idx));
+    }
+    return readers;
+  }
+
+  @Override
+  public Status scan(String table, String startkey, int recordcount, Set<String> fields,
+      Vector<HashMap<String, ByteIterator>> result) {
+    LOGGER.debug("scan table {} from key {} and size {}", table, startkey, recordcount);
+    YDBTable ydbTable = connection.findTable(table);
+
+    try {
+      List<ResultSetReader> readers;
+      if (useKV) {
+        readers = scanRowsByKV(ydbTable, startkey, recordcount, fields);
+      } else {
+        readers = scanRows(ydbTable, startkey, recordcount, fields);
+      }
+
+      int rowsCount = 0;
+      for (ResultSetReader rs: readers) {
+        rowsCount += rs.getRowCount();
+      }
+      result.ensureCapacity(rowsCount);
+
+      for (ResultSetReader rs: readers) {
+        final int keyColumnIndex = rs.getColumnIndex(ydbTable.keyColumnName());
+        while (rs.next()) {
+          HashMap<String, ByteIterator> columns = new HashMap<>();
+          for (int i = 0; i < rs.getColumnCount(); ++i) {
+            if (i == keyColumnIndex) {
+              final byte[] val = rs.getColumn(i).getText().getBytes();
+              columns.put(rs.getColumnName(i), new ByteArrayByteIterator(val));
+            } else {
+              final byte[] val = rs.getColumn(i).getBytes();
+              columns.put(rs.getColumnName(i), new ByteArrayByteIterator(val));
+            }
           }
+          result.add(columns);
         }
-        result.add(columns);
       }
     } catch (UnexpectedResultException e) {
       LOGGER.error(String.format("Scan failed: %s", e.toString()));
@@ -475,6 +551,10 @@ public class YDBClient extends DB {
   public Status update(String table, String key, Map<String, ByteIterator> values) {
     LOGGER.debug("update record table {} with key {}", table, key);
 
+    if (useKV) { // KeyValue service always uses BulkUpsert
+      return bulkUpsert(table, key, values);
+    }
+
     if (usePreparedUpdateInsert) {
       if (forceUpdate) {
         return updatePrepared(table, key, values);
@@ -495,7 +575,7 @@ public class YDBClient extends DB {
   public Status insert(String table, String key, Map<String, ByteIterator> values) {
     LOGGER.debug("insert record into table {} with key {}", table, key);
     // note that inserting same key twice results into error
-    if (forceUpsert) {
+    if (forceUpsert || useKV) {
       return update(table, key, values);
     }
 
