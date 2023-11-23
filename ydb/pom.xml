@@ -33,8 +33,11 @@ LICENSE file.
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <maven.compiler.source>1.7</maven.compiler.source>
-    <maven.compiler.target>1.7</maven.compiler.target>
+    <maven.compiler.source>1.8</maven.compiler.source>
+    <maven.compiler.target>1.8</maven.compiler.target>
+
+    <ydb.sdk.version>2.3.13</ydb.sdk.version>
+    <ydb.yc-auth.version>2.2.0</ydb.yc-auth.version>
   </properties>
 
   <dependencies>
@@ -54,20 +57,14 @@ LICENSE file.
 
     <dependency>
       <groupId>tech.ydb</groupId>
-      <artifactId>ydb-sdk-core</artifactId>
-      <version>2.1.8</version>
-    </dependency>
-
-    <dependency>
-      <groupId>tech.ydb</groupId>
       <artifactId>ydb-sdk-table</artifactId>
-      <version>2.1.8</version>
+      <version>${ydb.sdk.version}</version>
     </dependency>
 
     <dependency>
       <groupId>tech.ydb.auth</groupId>
       <artifactId>yc-auth-provider</artifactId>
-      <version>2.1.0</version>
+      <version>${ydb.yc-auth.version}</version>
     </dependency>
 
     <dependency>
