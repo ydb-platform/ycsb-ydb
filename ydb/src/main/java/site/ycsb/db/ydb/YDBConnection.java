@@ -29,6 +29,7 @@ import org.slf4j.LoggerFactory;
 import site.ycsb.Client;
 import site.ycsb.DBException;
 import tech.ydb.auth.AuthProvider;
+import tech.ydb.auth.NopAuthProvider;
 import tech.ydb.auth.TokenAuthProvider;
 import tech.ydb.auth.iam.CloudAuthHelper;
 import tech.ydb.core.Result;
@@ -46,6 +47,7 @@ public class YDBConnection {
 
   private static final String KEY_DSN = "dsn";
   private static final String KEY_TOKEN = "token";
+  private static final String KEY_SA_FILE = "saFile";
 
   private static final Map<String, YDBConnection> CACHE = new HashMap<>();
 
@@ -146,10 +148,13 @@ public class YDBConnection {
       throw new DBException("Invalid data source name: '" + url + ";. Must be of the form 'grpc[s]://url:port'");
     }
 
-    AuthProvider authProvider = CloudAuthHelper.getAuthProviderFromEnviron();
+    AuthProvider authProvider = NopAuthProvider.INSTANCE;
     String token = props.getProperty(KEY_TOKEN, null);
+    String saKey = props.getProperty(KEY_SA_FILE, null);
     if (token != null) {
       authProvider = new TokenAuthProvider(token);
+    } else if (saKey != null) {
+      authProvider = CloudAuthHelper.getServiceAccountFileAuthProvider(saKey);
     }
 
     LOGGER.info("Create grpc transport with dsn {}", url);
