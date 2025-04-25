@@ -181,7 +181,7 @@ public class YDBTable {
     if (policy != null) {
       List<TupleValue> partitionPoints = policy.getExplicitPartitioningPoints();
       if (partitionPoints != null) {
-        int minParts = createTableSettings.getPartitioningPolicy().getExplicitPartitioningPoints().size() + 1;
+        int minParts = partitionPoints.size() + 1;
         if (maxParts != 0 && maxParts < minParts) {
           minParts = maxParts;
         }
@@ -248,24 +248,31 @@ public class YDBTable {
 
     LOGGER.info("Table will be presplitted into {} shards", rangecount);
 
+    CreateTableSettings settings = new CreateTableSettings();
+
+    if (rangecount == 1) {
+      // no need to presplit
+      return settings;
+    }
+
     final long rangesize = recordcount / rangecount + 1;
     final int splitKeysSize = rangecount - 1;
-    String[] splitKeys = new String[splitKeysSize];
-    for (int i = 0; i < splitKeysSize; ++i) {
-      long keynum = i * rangesize;
-      splitKeys[i] = CoreWorkload.buildKeyName(keynum, zeropadding, orderedinserts);
+    if (splitKeysSize != 0) {
+      String[] splitKeys = new String[splitKeysSize];
+      for (int i = 0; i < splitKeysSize; ++i) {
+        long keynum = i * rangesize;
+        splitKeys[i] = CoreWorkload.buildKeyName(keynum, zeropadding, orderedinserts);
+      }
+      // always sort keys, because even for ordered inserts we might not have zero padding
+      Arrays.sort(splitKeys);
+
+      PartitioningPolicy policy = new PartitioningPolicy();
+      for (int i = 0; i < splitKeysSize; ++i) {
+        policy.addExplicitPartitioningPoint(TupleValue.of(PrimitiveValue.newText(splitKeys[i]).makeOptional()));
+      }
+
+      settings.setPartitioningPolicy(policy);
     }
-
-    // always sort keys, because even for ordered inserts we might not have zero padding
-    Arrays.sort(splitKeys);
-
-    PartitioningPolicy policy = new PartitioningPolicy();
-    for (int i = 0; i < splitKeysSize; ++i) {
-      policy.addExplicitPartitioningPoint(TupleValue.of(PrimitiveValue.newText(splitKeys[i]).makeOptional()));
-    }
-
-    CreateTableSettings settings = new CreateTableSettings();
-    settings.setPartitioningPolicy(policy);
 
     return settings;
   }
