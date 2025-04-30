@@ -305,19 +305,19 @@ public final class Client {
 
     Measurements.setProperties(props);
 
-    int opcount;
+    long opcount;
     if (dotransactions) {
-      opcount = Integer.parseInt(props.getProperty(OPERATION_COUNT_PROPERTY, "0"));
+      opcount = Long.parseLong(props.getProperty(OPERATION_COUNT_PROPERTY, "0"));
     } else {
       if (props.containsKey(INSERT_COUNT_PROPERTY)) {
-        opcount = Integer.parseInt(props.getProperty(INSERT_COUNT_PROPERTY, "0"));
+        opcount = Long.parseLong(props.getProperty(INSERT_COUNT_PROPERTY, "0"));
       } else {
-        opcount = Integer.parseInt(props.getProperty(RECORD_COUNT_PROPERTY, DEFAULT_RECORD_COUNT));
+        opcount = Long.parseLong(props.getProperty(RECORD_COUNT_PROPERTY, DEFAULT_RECORD_COUNT));
       }
     }
 
     if (threadcount > opcount && opcount > 0){
-      threadcount = opcount;
+      threadcount = (int) opcount;
       props.setProperty(THREAD_COUNT_PROPERTY, String.valueOf(threadcount));
       System.out.println("Warning: the threadcount is bigger than recordcount, the threadcount will be recordcount!");
     }
@@ -335,13 +335,13 @@ public final class Client {
       workloads = new ArrayList<>(threadcount);
       workloadProperties = new ArrayList<>(threadcount);
 
-      int opsPerThread = opcount / threadcount;
+      long opsPerThread = opcount / threadcount;
       int currentStart = 0;
       for (int i = 0; i < threadcount; i++) {
         Properties copyProps = (Properties) props.clone();
         workloadProperties.add(copyProps);
 
-        int currentInsertCount;
+        long currentInsertCount;
         if (i == threadcount - 1) {
           currentInsertCount = opcount - currentStart;
         } else {
@@ -488,7 +488,7 @@ public final class Client {
           break;
         }
 
-        int threadopcount;
+        long threadopcount;
 
         // hacky: for multithreaded loads we use per thread workload and workload properties,
         // but for the run phase we use the first ones only and calculate per thread opcount (original code).
@@ -496,18 +496,18 @@ public final class Client {
         // In other words we treat INSERT_COUNT_PROPERTY as per thread value in new multithreaded load,
         // but as total value in the original load.
         if (!dotransactions && threadcount > 1) {
-          threadopcount = Integer.parseInt(props.getProperty(INSERT_COUNT_PROPERTY, "0"));
+          threadopcount = Long.parseLong(props.getProperty(INSERT_COUNT_PROPERTY, "0"));
         } else {
           // the original implementation of the single threaded load or multithreaded run phase
-          int opcount;
+          long opcount;
 
           if (dotransactions) {
-            opcount = Integer.parseInt(props.getProperty(OPERATION_COUNT_PROPERTY, "0"));
+            opcount = Long.parseLong(props.getProperty(OPERATION_COUNT_PROPERTY, "0"));
           } else {
             if (props.containsKey(INSERT_COUNT_PROPERTY)) {
-              opcount = Integer.parseInt(props.getProperty(INSERT_COUNT_PROPERTY, "0"));
+              opcount = Long.parseLong(props.getProperty(INSERT_COUNT_PROPERTY, "0"));
             } else {
-              opcount = Integer.parseInt(props.getProperty(RECORD_COUNT_PROPERTY, DEFAULT_RECORD_COUNT));
+              opcount = Long.parseLong(props.getProperty(RECORD_COUNT_PROPERTY, DEFAULT_RECORD_COUNT));
             }
           }
 

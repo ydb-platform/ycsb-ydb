@@ -215,7 +215,7 @@ public class YDBTable {
         Integer.parseInt(
             props.getProperty(CoreWorkload.ZERO_PADDING_PROPERTY, CoreWorkload.ZERO_PADDING_PROPERTY_DEFAULT));
 
-    final boolean dotransactions = Boolean.valueOf(
+    final boolean dotransactions = Boolean.parseBoolean(
         props.getProperty(Client.DO_TRANSACTIONS_PROPERTY, String.valueOf(true)));
 
     long recordcount;
@@ -227,9 +227,9 @@ public class YDBTable {
       recordcount = perThreadRows * threads;
     } else {
       if (props.containsKey(Client.INSERT_COUNT_PROPERTY)) {
-        recordcount = Integer.parseInt(props.getProperty(Client.INSERT_COUNT_PROPERTY, "0"));
+        recordcount = Long.parseLong(props.getProperty(Client.INSERT_COUNT_PROPERTY, "0"));
       } else {
-        recordcount = Integer.parseInt(props.getProperty(Client.RECORD_COUNT_PROPERTY, Client.DEFAULT_RECORD_COUNT));
+        recordcount = Long.parseLong(props.getProperty(Client.RECORD_COUNT_PROPERTY, Client.DEFAULT_RECORD_COUNT));
       }
     }
 
