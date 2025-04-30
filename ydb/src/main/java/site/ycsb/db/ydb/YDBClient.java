@@ -29,10 +29,10 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import site.ycsb.*;
+import tech.ydb.common.transaction.TxMode;
 import tech.ydb.core.Result;
 import tech.ydb.core.StatusCode;
 import tech.ydb.core.UnexpectedResultException;
-import tech.ydb.query.TxMode;
 import tech.ydb.table.query.DataQueryResult;
 import tech.ydb.table.query.Params;
 import tech.ydb.table.query.ReadRowsResult;
@@ -170,12 +170,12 @@ public class YDBClient extends DB {
 
   private List<ResultSetReader> executeReadByQueryService(String query, Params params) {
     List<ResultSetReader> readers = new ArrayList<>();
-    connection.executeQueryStatus(session -> {
+    connection.executeQueryResult(session -> {
         readers.clear();
-        return session.executeQuery(query, TxMode.serializableRw(), params).start(part -> {
+        return session.createQuery(query, TxMode.SERIALIZABLE_RW, params).execute(part -> {
             readers.add(part.getResultSetReader());
           });
-      }).join().expectSuccess("execute query service problem");
+      }).join().getStatus().expectSuccess("execute query service problem");
 
     return readers;
   }
@@ -353,9 +353,9 @@ public class YDBClient extends DB {
   }
 
   private CompletableFuture<tech.ydb.core.Status> executeUpdateByQueryService(String query, Params params) {
-    return connection.executeQueryStatus(
-        session -> session.executeQuery(query, TxMode.serializableRw(), params).start(part -> {})
-    );
+    return connection.executeQueryResult(
+        session -> session.createQuery(query, TxMode.SERIALIZABLE_RW, params).execute()
+    ).thenApply(Result::getStatus);
   }
 
   private CompletableFuture<tech.ydb.core.Status> executeQueryImpl(String query, Params params) {
