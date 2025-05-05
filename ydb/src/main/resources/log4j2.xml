@@ -12,11 +12,7 @@
             <AppenderRef ref="Console"/>
         </Logger>
 
-        <Logger name="io.netty" level="warn" additivity="false">
-            <AppenderRef ref="Console"/>
-        </Logger>
-
-        <Logger name="tech.ydb" level="warn" additivity="false">
+        <Logger name="tech.ydb" level="info" additivity="false">
             <AppenderRef ref="Console"/>
         </Logger>
 

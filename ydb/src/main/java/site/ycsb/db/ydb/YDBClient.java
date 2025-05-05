@@ -29,6 +29,7 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import site.ycsb.*;
+import tech.ydb.common.transaction.TxMode;
 import tech.ydb.core.Result;
 import tech.ydb.core.StatusCode;
 import tech.ydb.core.UnexpectedResultException;
@@ -59,6 +60,7 @@ public class YDBClient extends DB {
 
   private static boolean usePreparedUpdateInsert = true;
   private static boolean forceUpsert = false;
+  private static boolean useQueryService = false;
   private static boolean forceUpdate = false;
   private static boolean useBulkUpsert = false;
   private static boolean useKV = false;
@@ -92,6 +94,8 @@ public class YDBClient extends DB {
       properties.setProperty("preparedInsertUpdateQueries", "true");
       properties.setProperty("forceUpsert", "true");
       properties.setProperty("bulkUpsert", "true");
+      properties.setProperty("useKV", "false");
+      properties.setProperty("useQueryService", "false");
       properties.setProperty("bulkUpsertBatchSize", "1000");
 
       final boolean presplitTable = Boolean.parseBoolean(
@@ -109,8 +113,10 @@ public class YDBClient extends DB {
     usePreparedUpdateInsert = Boolean.parseBoolean(properties.getProperty("preparedInsertUpdateQueries", "true"));
     forceUpsert = Boolean.parseBoolean(properties.getProperty("forceUpsert", "false"));
     useBulkUpsert = Boolean.parseBoolean(properties.getProperty("bulkUpsert", "false"));
-    useKV = Boolean.parseBoolean(properties.getProperty("useKV", "false"));
     bulkUpsertBatchSize = Integer.parseInt(properties.getProperty("bulkUpsertBatchSize", "1"));
+
+    useKV = Boolean.parseBoolean(properties.getProperty("useKV", "false"));
+    useQueryService = Boolean.parseBoolean(properties.getProperty("useQueryService", "false"));
 
     forceUpdate = Boolean.parseBoolean(properties.getProperty("forceUpdate", "false"));
 
@@ -148,7 +154,33 @@ public class YDBClient extends DB {
     }
   }
 
-  private ResultSetReader readRowByKV(YDBTable table, String key, Set<String> fields) {
+  private List<ResultSetReader> executeReadByTableService(String query, Params params) {
+    TxControl txControl = TxControl.serializableRw().setCommitTx(true);
+
+    DataQueryResult queryResult = connection.executeResult(
+        session -> session.executeDataQuery(query, txControl, params)
+    ).join().getValue();
+
+    if (queryResult.getResultSetCount() == 0) {
+      return Collections.emptyList();
+    }
+
+    return Arrays.asList(queryResult.getResultSet(0));
+  }
+
+  private List<ResultSetReader> executeReadByQueryService(String query, Params params) {
+    List<ResultSetReader> readers = new ArrayList<>();
+    connection.executeQueryResult(session -> {
+        readers.clear();
+        return session.createQuery(query, TxMode.SERIALIZABLE_RW, params).execute(part -> {
+            readers.add(part.getResultSetReader());
+          });
+      }).join().getStatus().expectSuccess("execute query service problem");
+
+    return readers;
+  }
+
+  private List<ResultSetReader> executeReadRows(YDBTable table, String key, Set<String> fields) {
     String tablePath = connection.getDatabase() + "/" + table.name();
     List<String> columns = fields == null || fields.isEmpty() ? table.columnNames() : new ArrayList<>(fields);
 
@@ -161,10 +193,14 @@ public class YDBClient extends DB {
         session -> session.readRows(tablePath, settings)
     ).join();
     resultWrapped.getStatus().expectSuccess("execute readRows method");
-    return resultWrapped.getValue().getResultSetReader();
+    return Arrays.asList(resultWrapped.getValue().getResultSetReader());
   }
 
-  private ResultSetReader readRow(YDBTable table, String key, Set<String> fields) {
+  private List<ResultSetReader> readImpl(YDBTable table, String key, Set<String> fields) {
+    if (useKV) {
+      return executeReadRows(table, key, fields);
+    }
+
     String fieldsString = "*";
     if (fields != null && !fields.isEmpty()) {
       fieldsString = String.join(",", fields);
@@ -178,19 +214,11 @@ public class YDBClient extends DB {
 
     Params params = Params.of("$key", PrimitiveValue.newText(key));
 
-    TxControl txControl = TxControl.serializableRw().setCommitTx(true);
-
-    Result<DataQueryResult> resultWrapped = connection.executeResult(
-        session -> session.executeDataQuery(query, txControl, params))
-        .join();
-    resultWrapped.getStatus().expectSuccess("execute read query");
-    DataQueryResult queryResult = resultWrapped.getValue();
-
-    if (queryResult.getResultSetCount() == 0) {
-      return null;
+    if (useQueryService) {
+      return executeReadByQueryService(query, params);
     }
 
-    return queryResult.getResultSet(0);
+    return executeReadByTableService(query, params);
   }
 
   @Override
@@ -199,18 +227,14 @@ public class YDBClient extends DB {
     YDBTable ydbTable = connection.findTable(table);
 
     try {
-      ResultSetReader rs;
-      if (useKV) {
-        rs = readRowByKV(ydbTable, key, fields);
-      } else {
-        rs = readRow(ydbTable, key, fields);
-      }
+      List<ResultSetReader> list = readImpl(ydbTable, key, fields);
 
-      if (rs == null || rs.getRowCount() == 0) {
+      if (list == null || list.isEmpty() || list.get(0).getRowCount() == 0) {
         ++notFound;
         return Status.NOT_FOUND;
       }
 
+      ResultSetReader rs = list.get(0);
       final int keyColumnIndex = rs.getColumnIndex(ydbTable.keyColumnName());
       while (rs.next()) {
         for (int i = 0; i < rs.getColumnCount(); ++i) {
@@ -253,7 +277,11 @@ public class YDBClient extends DB {
     return readers;
   }
 
-  private List<ResultSetReader> scanRows(YDBTable table, String startkey, int recordcount, Set<String> fields) {
+  private List<ResultSetReader> scanImpl(YDBTable table, String startkey, int recordcount, Set<String> fields) {
+    if (useKV) {
+      return scanRowsByKV(table, startkey, recordcount, fields);
+    }
+
     String fieldsString = "*";
     if (fields != null && !fields.isEmpty()) {
       fieldsString = String.join(",", fields);
@@ -269,19 +297,11 @@ public class YDBClient extends DB {
 
     LOGGER.trace(query);
 
-    TxControl txControl = TxControl.serializableRw().setCommitTx(true);
-
-    Result<DataQueryResult> resultWrapped = connection.executeResult(
-        session -> session.executeDataQuery(query, txControl, params))
-        .join();
-    resultWrapped.getStatus().expectSuccess("execute scan query");
-    DataQueryResult queryResult = resultWrapped.getValue();
-
-    List<ResultSetReader> readers = new ArrayList<>();
-    for (int idx = 0; idx <= queryResult.getResultSetCount(); idx += 1) {
-      readers.add(queryResult.getResultSet(idx));
+    if (useQueryService) {
+      return executeReadByQueryService(query, params);
     }
-    return readers;
+
+    return executeReadByTableService(query, params);
   }
 
   @Override
@@ -291,12 +311,7 @@ public class YDBClient extends DB {
     YDBTable ydbTable = connection.findTable(table);
 
     try {
-      List<ResultSetReader> readers;
-      if (useKV) {
-        readers = scanRowsByKV(ydbTable, startkey, recordcount, fields);
-      } else {
-        readers = scanRows(ydbTable, startkey, recordcount, fields);
-      }
+      List<ResultSetReader> readers = scanImpl(ydbTable, startkey, recordcount, fields);
 
       int rowsCount = 0;
       for (ResultSetReader rs: readers) {
@@ -330,20 +345,34 @@ public class YDBClient extends DB {
     return Status.OK;
   }
 
+  private CompletableFuture<tech.ydb.core.Status> executeUpdateByTableService(String query, Params params) {
+    TxControl txControl = TxControl.serializableRw().setCommitTx(true);
+    return connection.executeStatus(
+        session -> session.executeDataQuery(query, txControl, params).thenApply(Result::getStatus)
+    );
+  }
+
+  private CompletableFuture<tech.ydb.core.Status> executeUpdateByQueryService(String query, Params params) {
+    return connection.executeQueryResult(
+        session -> session.createQuery(query, TxMode.SERIALIZABLE_RW, params).execute()
+    ).thenApply(Result::getStatus);
+  }
+
+  private CompletableFuture<tech.ydb.core.Status> executeQueryImpl(String query, Params params) {
+    if (useQueryService) {
+      return executeUpdateByQueryService(query, params);
+    }
+
+    return executeUpdateByTableService(query, params);
+  }
+
   private Status executeQuery(String query, Params params, String op) {
     LOGGER.trace(query);
 
     try {
       if (inflightSemaphore != null) {
         inflightSemaphore.acquire();
-      }
-
-      TxControl txControl = TxControl.serializableRw().setCommitTx(true);
-      CompletableFuture<Result<DataQueryResult>> future = connection
-          .executeResult(session -> session.executeDataQuery(query, txControl, params));
-
-      if (inflightSemaphore != null) {
-        future.whenComplete((result, th) -> {
+        executeQueryImpl(query, params).whenComplete((result, th) -> {
             if (th == null && result != null && result.isSuccess()) {
               ++oks;
             } else {
@@ -352,7 +381,7 @@ public class YDBClient extends DB {
             inflightSemaphore.release();
           });
       } else {
-        future.join().getStatus().expectSuccess(String.format("execute %s query problem", op));
+        executeQueryImpl(query, params).join().expectSuccess(String.format("execute %s query problem", op));
         ++oks;
       }
 
@@ -364,8 +393,7 @@ public class YDBClient extends DB {
     }
   }
 
-  private Status updatePrepared(
-      String table, String key, Map<String, ByteIterator> values) {
+  private Status updatePrepared(String table, String key, Map<String, ByteIterator> values) {
     YDBTable ydbTable = connection.findTable(table);
 
     final StringBuilder queryDeclare = new StringBuilder();
@@ -389,8 +417,7 @@ public class YDBClient extends DB {
     return executeQuery(query, params, "update");
   }
 
-  private Status insertOrUpsertPrepared(
-      String table, String key, Map<String, ByteIterator> values, String op) {
+  private Status insertOrUpsertPrepared(String table, String key, Map<String, ByteIterator> values, String op) {
     YDBTable ydbTable = connection.findTable(table);
 
     final StringBuilder queryDeclare = new StringBuilder();
@@ -416,8 +443,7 @@ public class YDBClient extends DB {
     return executeQuery(query, params, op);
   }
 
-  private Status insertOrUpsertNotPrepared(
-      String table, String key, Map<String, ByteIterator> values, String op) {
+  private Status insertOrUpsertNotPrepared(String table, String key, Map<String, ByteIterator> values, String op) {
     YDBTable ydbTable = connection.findTable(table);
 
     final StringBuilder queryColumns = new StringBuilder();
@@ -599,9 +625,7 @@ public class YDBClient extends DB {
     Params params = Params.of("$key", PrimitiveValue.newText(key));
 
     try {
-      TxControl txControl = TxControl.serializableRw().setCommitTx(true);
-      StatusCode code = connection.executeResult(session -> session.executeDataQuery(query, txControl, params))
-          .join().getStatus().getCode();
+      StatusCode code = executeQueryImpl(query, params).join().getCode();
 
       switch (code) {
       case SUCCESS:
